@@ -105,8 +105,10 @@ export function createWebSocketFetch(options?: CreateWebSocketFetchOptions) {
         onTerminal: (event) => {
           entry.busy = false
           entry.lastUsedAt = Date.now()
-          entry.streamFailures = 0
-          if (event.type !== "response.completed" && event.type !== "response.done") {
+          if (event.type === "response.completed" || event.type === "response.done") {
+            entry.streamFailures = 0
+          } else {
+            recordStreamFailure(entry)
             invalidate(entry)
           }
         },
