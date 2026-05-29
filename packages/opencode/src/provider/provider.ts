@@ -29,6 +29,7 @@ import { ModelID, ProviderID } from "./schema"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderError } from "./error"
+import { OpenAIWebSocketPool } from "@/plugin/openai/ws-pool"
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -162,6 +163,10 @@ function selectAzureLanguageModel(sdk: any, modelID: string, useChat: boolean) {
   if (sdk.messages) return sdk.messages(modelID)
   if (sdk.chat) return sdk.chat(modelID)
   return sdk.languageModel(modelID)
+}
+
+function hasResponsesModel(sdk: BundledSDK | SDK): sdk is SDK & { responses: (modelID: string) => LanguageModelV3 } {
+  return "responses" in sdk && typeof sdk.responses === "function"
 }
 
 function custom(dep: CustomDep): Record<string, CustomLoader> {
@@ -1313,6 +1318,8 @@ export const layer = Layer.effect(
               existingModel?.api.npm ??
               modelsDev[providerID]?.npm ??
               "@ai-sdk/openai-compatible"
+            const apiURL = model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? ""
+            const baseURL = typeof parsed.options.baseURL === "string" ? parsed.options.baseURL : ""
             const name = iife(() => {
               if (model.name) return model.name
               if (model.id && model.id !== modelID) return modelID
@@ -1322,8 +1329,8 @@ export const layer = Layer.effect(
               id: ModelID.make(modelID),
               api: {
                 id: apiID,
-                npm: apiNpm,
-                url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
+                npm: runtimeFlags.experimentalWebSockets && baseURL ? "@ai-sdk/openai" : apiNpm,
+                url: apiURL,
               },
               status: model.status ?? existingModel?.status ?? "active",
               name,
@@ -1612,11 +1619,17 @@ export const layer = Layer.effect(
         const customFetch = options["fetch"]
         const chunkTimeout = options["chunkTimeout"]
         const headerTimeout = options["headerTimeout"]
+        const websocketFetch =
+          runtimeFlags.experimentalWebSockets &&
+          (model.api.npm === "@ai-sdk/openai-compatible" || model.api.npm === "@ai-sdk/openai") &&
+          !model.providerID.startsWith("opencode")
+            ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: customFetch ?? fetch })
+            : undefined
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
-          const fetchFn = customFetch ?? fetch
+          const fetchFn = websocketFetch ?? customFetch ?? fetch
           const opts = init ?? {}
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
           const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
@@ -1745,6 +1758,8 @@ export const layer = Layer.effect(
                 ...provider.options,
                 ...model.options,
               })
+            : model.api.npm === "@ai-sdk/openai" && hasResponsesModel(sdk)
+              ? sdk.responses(model.api.id)
             : sdk.languageModel(model.api.id)
           s.models.set(key, language)
           return language
