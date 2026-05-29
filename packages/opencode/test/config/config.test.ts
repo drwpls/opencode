@@ -9,7 +9,7 @@ import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 
 import { InstanceRef } from "../../src/effect/instance-ref"
 import type { InstanceContext } from "../../src/project/instance-context"
-import { Auth } from "../../src/auth"
+import { AuthWellKnown } from "@opencode-ai/core/auth-well-known"
 import { Account } from "../../src/account/account"
 import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
@@ -35,8 +35,9 @@ import { ProjectID } from "../../src/project/schema"
 import { Filesystem } from "@/util/filesystem"
 import { ConfigPlugin } from "@/config/plugin"
 import { AccountTest } from "../fake/account"
-import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
+import { Substitution } from "@opencode-ai/core/substitution"
+import { AuthWellKnownTest } from "../fake/auth-well-known"
 
 /** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
 const infra = CrossSpawnSpawner.defaultLayer.pipe(
@@ -49,6 +50,9 @@ const unexpectedHttp = HttpClient.make((request) =>
   Effect.die(`unexpected http request: ${request.method} ${request.url}`),
 )
 
+const runSubstitution = <A, E>(effect: Effect.Effect<A, E, Substitution.Service>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(Substitution.defaultLayer)))
+
 const json = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown, status = 200) =>
   HttpClientResponse.fromWeb(
     request,
@@ -59,11 +63,16 @@ const json = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: u
   )
 
 const wellKnownAuth = (url: string) =>
-  Layer.mock(Auth.Service)({
-    all: () =>
-      Effect.succeed({
-        [url]: new Auth.WellKnown({ type: "wellknown", key: "TEST_TOKEN", token: "test-token" }),
-      }),
+  Layer.mock(AuthWellKnown.Service)({
+    configs: () =>
+      Effect.succeed([
+        {
+          url,
+          source: `${url.replace(/\/+$/, "")}/.well-known/opencode`,
+          dir: `${url.replace(/\/+$/, "")}/.well-known`,
+          content: {},
+        },
+      ]),
   })
 
 function remoteConfigClient(input: {
@@ -87,15 +96,16 @@ function remoteConfigClient(input: {
 
 const configLayer = (
   options: {
-    auth?: Layer.Layer<Auth.Service>
+    auth?: Layer.Layer<AuthWellKnown.Service>
     account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
   } = {},
 ) =>
   Config.layer.pipe(
     Layer.provide(testFlock),
+    Layer.provide(Substitution.defaultLayer),
     Layer.provide(Env.defaultLayer),
-    Layer.provide(options.auth ?? AuthTest.empty),
+    Layer.provide(options.auth ?? AuthWellKnownTest.empty),
     Layer.provide(options.account ?? AccountTest.empty),
     Layer.provideMerge(infra),
     Layer.provide(NpmTest.noop),
@@ -552,8 +562,72 @@ it.instance("handles file inclusion with replacement tokens", () =>
   }),
 )
 
-const accountTokenIt = configIt({
-  account: Layer.mock(Account.Service)({
+test("environment variable substitution accepts an env overlay", async () => {
+  const originalEnv = process.env["TEST_VAR"]
+  delete process.env["TEST_VAR"]
+
+  try {
+    expect(
+      await runSubstitution(
+        Substitution.Service.use((substitution) =>
+          substitution.substitute({
+          text: "{env:TEST_VAR}",
+          type: "virtual",
+          dir: "/tmp",
+          source: "test",
+          env: { TEST_VAR: "overlay" },
+        }),
+        ),
+      ),
+    ).toBe("overlay")
+  } finally {
+    if (originalEnv === undefined) delete process.env["TEST_VAR"]
+    else process.env["TEST_VAR"] = originalEnv
+  }
+})
+
+test("preserves env variables when adding $schema to config", async () => {
+  const originalEnv = process.env["PRESERVE_VAR"]
+  process.env["PRESERVE_VAR"] = "secret_value"
+
+  try {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        // Config without $schema - should trigger auto-add
+        await Filesystem.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            username: "{env:PRESERVE_VAR}",
+          }),
+        )
+      },
+    })
+    await withTestInstance({
+      directory: tmp.path,
+      fn: async (ctx) => {
+        const config = await load(ctx)
+        expect(config.username).toBe("secret_value")
+
+        // Read the file to verify the env variable was preserved
+        const content = await Filesystem.readText(path.join(tmp.path, "opencode.json"))
+        expect(content).toContain("{env:PRESERVE_VAR}")
+        expect(content).not.toContain("secret_value")
+        expect(content).toContain("$schema")
+      },
+    })
+  } finally {
+    if (originalEnv !== undefined) {
+      process.env["PRESERVE_VAR"] = originalEnv
+    } else {
+      delete process.env["PRESERVE_VAR"]
+    }
+  }
+})
+
+test("resolves env templates in account config with account token", async () => {
+  const originalControlToken = process.env["OPENCODE_CONSOLE_TOKEN"]
+
+  const fakeAccount = Layer.mock(Account.Service)({
     active: () =>
       Effect.succeed(
         Option.some({
@@ -585,15 +659,36 @@ const accountTokenIt = configIt({
         }),
       ),
     token: () => Effect.succeed(Option.some(AccessToken.make("st_test_token"))),
-  }),
-})
+  })
 
-accountTokenIt.instance("resolves env templates in account config with account token", () =>
-  Effect.gen(function* () {
-    const config = yield* Config.use.get()
-    expect(config.provider?.["opencode"]?.options?.apiKey).toBe("st_test_token")
-  }),
-)
+  const layer = Config.layer.pipe(
+    Layer.provide(testFlock),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Substitution.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(AuthWellKnownTest.empty),
+    Layer.provide(fakeAccount),
+    Layer.provideMerge(infra),
+    Layer.provide(NpmTest.noop),
+  )
+
+  try {
+    await provideTmpdirInstance(() =>
+      Config.Service.use((svc) =>
+        Effect.gen(function* () {
+          const config = yield* svc.get()
+          expect(config.provider?.["opencode"]?.options?.apiKey).toBe("st_test_token")
+        }),
+      ),
+    ).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise)
+  } finally {
+    if (originalControlToken !== undefined) {
+      process.env["OPENCODE_CONSOLE_TOKEN"] = originalControlToken
+    } else {
+      delete process.env["OPENCODE_CONSOLE_TOKEN"]
+    }
+  }
+})
 
 it.instance("validates config schema and throws on invalid fields", () =>
   Effect.gen(function* () {
@@ -1504,6 +1599,7 @@ test("remote well-known config can use FetchHttpClient layer", async () => {
           Layer.provide(testFlock),
           Layer.provide(AppFileSystem.defaultLayer),
           Layer.provide(Env.defaultLayer),
+          Layer.provide(Substitution.defaultLayer),
           Layer.provide(wellKnownAuth(server.url.origin)),
           Layer.provide(AccountTest.empty),
           Layer.provideMerge(infra),
