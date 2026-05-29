@@ -38,6 +38,7 @@ jobs:
         run: ./packages/opencode/script/build.ts --single
         env:
           OPENCODE_VERSION: 0.0.0-fork.${{ github.run_number }}
+          OPENCODE_CHANNEL: local
           OPENCODE_RELEASE: ""
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
