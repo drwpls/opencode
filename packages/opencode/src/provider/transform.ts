@@ -960,6 +960,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
         )
       }
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/openai
+      // Compatible providers using @ai-sdk/openai (via WSS switch) don't support
+      // OpenAI-specific options like reasoningSummary or encrypted reasoning state.
+      if (model.providerID !== "openai") {
+        return Object.fromEntries(
+          openaiCompatibleReasoningEfforts(model.api.id).map((effort) => [effort, { reasoningEffort: effort }]),
+        )
+      }
       const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
       return Object.fromEntries(
         efforts.map((effort) => [
@@ -1322,7 +1329,6 @@ export function smallOptions(model: Provider.Model) {
   const small = Object.values(model.variants ?? {})[0] ?? {}
   if (
     model.providerID === "openai" ||
-    model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/github-copilot" ||
     model.api.npm === "@ai-sdk/xai"
   ) {

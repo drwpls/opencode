@@ -55,6 +55,7 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  const isCompatibleResponsesApi = input.model.api.npm === "@ai-sdk/openai" && input.model.providerID !== "openai"
   const system = [
     [
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
@@ -96,10 +97,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     delete options.reasoningSummary
     delete options.include
   }
-  if (isOpenaiOauth) options.instructions = system.join("\n")
+  if (isOpenaiOauth || isCompatibleResponsesApi) options.instructions = system.join("\n")
 
   const messages =
-    isOpenaiOauth || input.isWorkflow
+    isOpenaiOauth || isCompatibleResponsesApi || input.isWorkflow
       ? input.messages
       : [
           ...system.map(
