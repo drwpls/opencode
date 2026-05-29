@@ -199,7 +199,7 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
       if (idleTimer) clearTimeout(idleTimer)
       idleTimer = undefined
       try {
-        const next = await options.onRetryableTerminal(event)
+        const next = options.onRetryableTerminal ? await options.onRetryableTerminal(event) : undefined
         if (completed) {
           if (next) terminateSocket(next)
           return
@@ -208,6 +208,14 @@ export function streamResponsesWebSocket(options: StreamResponsesWebSocketOption
           attach(next)
           return
         }
+        // Not a retryable terminal — surface the server error so it propagates
+        // to the session retry logic instead of being silently swallowed by the AI SDK.
+        const errMsg =
+          typeof event.error === "object" && event.error !== null && typeof (event.error as any).message === "string"
+            ? (event.error as any).message
+            : JSON.stringify(event.error ?? event)
+        invalidate(new ProviderError.ResponseStreamError(errMsg))
+        return
       } catch (error) {
         invalidate(
           new ProviderError.ResponseStreamError(error instanceof Error ? error.message : String(error), {
