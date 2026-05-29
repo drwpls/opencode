@@ -184,7 +184,12 @@ const layer = Layer.effect(
           const namespace = path.basename(match, path.extname(match))
           // `match` is an absolute filesystem path from `Glob.scanSync(..., { absolute: true })`.
           // Import it as `file://` so Node on Windows accepts the dynamic import.
-          const mod = yield* Effect.promise(() => import(pathToFileURL(match).href))
+          const mod = yield* Effect.promise(() =>
+            import(pathToFileURL(match).href).catch((err) => {
+              log.warn("failed to import custom tool, skipping", { file: match, error: String(err) })
+              return {}
+            }),
+          )
           for (const [id, def] of Object.entries(mod)) {
             if (!isPluginTool(def)) continue
             custom.push(fromPlugin(id === "default" ? namespace : `${namespace}_${id}`, def))
