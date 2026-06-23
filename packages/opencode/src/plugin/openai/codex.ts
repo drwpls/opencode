@@ -111,7 +111,6 @@ interface TokenResponse {
 interface CodexAuthPluginOptions {
   issuer?: string
   codexApiEndpoint?: string
-  experimentalWebSockets?: boolean
 }
 
 async function exchangeCodeForTokens(code: string, redirectUri: string, pkce: PkceCodes): Promise<TokenResponse> {
@@ -324,9 +323,10 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
     },
     auth: {
       provider: "openai",
-      async loader(getAuth) {
+      async loader(getAuth, provider) {
         const auth = await getAuth()
-        const websocketFetch = options.experimentalWebSockets
+        const webSocketEnabled = provider.options?.webSocket === true
+        const websocketFetch = webSocketEnabled
           ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: fetch })
           : undefined
         if (websocketFetch) {

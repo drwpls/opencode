@@ -198,22 +198,21 @@ describe("plugin.codex", () => {
     })
   })
 
-  test("installs websocket transport only when experimental websockets are enabled", async () => {
-    const disabled = await CodexAuthPlugin({} as never)
-    const enabled = await CodexAuthPlugin({} as never, { experimentalWebSockets: true })
+  test("installs websocket transport only when provider options.webSocket is enabled", async () => {
+    const plugin = await CodexAuthPlugin({} as never)
 
-    const disabledOptions = await disabled.auth!.loader!(
+    const disabledOptions = await plugin.auth!.loader!(
       async () => ({ type: "api", key: "sk-test" }) as never,
-      {} as never,
+      { options: {} } as never,
     )
-    const enabledOptions = await enabled.auth!.loader!(
+    const enabledOptions = await plugin.auth!.loader!(
       async () => ({ type: "api", key: "sk-test" }) as never,
-      {} as never,
+      { options: { webSocket: true } } as never,
     )
 
     expect(disabledOptions.fetch).toBeUndefined()
     expect(enabledOptions.fetch).toBeFunction()
-    await enabled.dispose?.()
+    await plugin.dispose?.()
   })
 
   test("sends token residency only to the ChatGPT Codex backend", async () => {
