@@ -123,6 +123,10 @@ export const Info = Schema.Struct({
           description:
             "Timeout in milliseconds between streamed SSE chunks for this provider (default: 300000). If no chunk arrives within this window, the request is aborted. Set to false to disable timeout.",
         }),
+        webSocket: Schema.optional(Schema.Boolean).annotate({
+          description:
+            "Enable WebSocket transport for OpenAI-compatible providers. When true, requests to /responses endpoint use WebSocket instead of HTTP. Defaults to false.",
+        }),
       }),
       [Schema.Record(Schema.String, Schema.Any)],
     ),

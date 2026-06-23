@@ -1518,7 +1518,7 @@ const layer = Layer.effect(
               id: ModelV2.ID.make(modelID),
               api: {
                 id: apiID,
-                npm: runtimeFlags.experimentalWebSockets && baseURL ? "@ai-sdk/openai" : apiNpm,
+                npm: parsed.options["webSocket"] === true && baseURL ? "@ai-sdk/openai" : apiNpm,
                 url: apiURL,
               },
               status: model.status ?? existingModel?.status ?? "active",
@@ -1805,8 +1805,9 @@ const layer = Layer.effect(
         const customFetch = options["fetch"]
         const chunkTimeout = options["chunkTimeout"] ?? 300_000
         const headerTimeout = options["headerTimeout"] ?? 300_000
+        const webSocketEnabled = options["webSocket"] === true
         const websocketFetch =
-          runtimeFlags.experimentalWebSockets &&
+          webSocketEnabled &&
           (model.api.npm === "@ai-sdk/openai-compatible" || model.api.npm === "@ai-sdk/openai") &&
           !model.providerID.startsWith("opencode")
             ? OpenAIWebSocketPool.createWebSocketFetch({ httpFetch: customFetch ?? fetch })
